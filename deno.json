@@ -4,6 +4,10 @@
   "publish": {
     "exclude": ["tests/", "deno.lock", ".github/"]
   },
+  "minimumDependencyAge": {
+    "age": "PT24H",
+    "exclude": ["jsr:@innis/*"]
+  },
   "license": "MIT",
   "description": "Browser-side signer acquisition for Nostr web applications: one descriptor names where the key lives (NIP-07 extension or NIP-46 bunker), one factory turns it into a Signer, storage remembers it between visits, and a NIP-98 proof builder turns the signer into an Authorization header.",
   "exports": {
