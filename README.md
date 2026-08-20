@@ -1,10 +1,20 @@
 # @innis/nostr-signer
 
+[![CI](https://github.com/johninnis/nostr-signer-ts/actions/workflows/ci.yml/badge.svg)](https://github.com/johninnis/nostr-signer-ts/actions/workflows/ci.yml)
+
 Browser-side signer acquisition for Nostr web applications: one `SignerDescriptor` names where
 the key lives — a NIP-07 extension or a NIP-46 bunker — and everything needed to reach it
 again; `signerFor` turns the descriptor into a `Signer` (the canonical contract from
 [`@innis/nostr-core`](https://jsr.io/@innis/nostr-core)), the same call whether the pairing is
 minutes or months old.
+
+## Install
+
+```bash
+deno add jsr:@innis/nostr-signer
+```
+
+## Quick start
 
 ```ts
 import { LocalStorageSigners, RelayPoolTransport, signedAuthHeader, signerFor } from "@innis/nostr-signer"
