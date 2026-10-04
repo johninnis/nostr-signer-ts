@@ -16,10 +16,21 @@
  * tell one client from another. It is still a credential — whoever holds it can ask that
  * bunker to sign as the visitor, within whatever the bunker allows — so it is discarded on
  * sign-out. It is carried as hex so a descriptor is JSON all the way down.
+ *
+ * `relays` is the set the bunker moved the client to with `switch_relays` at the last
+ * `connect`, written back by the application afterwards. A restored session does not ask
+ * again, so it starts where the bunker last put it — which matters once the bunker has
+ * migrated off the relays its old URL names. Absent in descriptors written before the first
+ * connect, or by older versions; the bunker URL's own relays are the fallback.
  */
 export type SignerDescriptor =
   | { readonly kind: "extension" }
-  | { readonly kind: "bunker"; readonly bunkerUrl: string; readonly clientSecretKeyHex: string }
+  | {
+    readonly kind: "bunker"
+    readonly bunkerUrl: string
+    readonly clientSecretKeyHex: string
+    readonly relays?: ReadonlyArray<string>
+  }
 
 /**
  * Whether an unknown value is a {@linkcode SignerDescriptor}.
@@ -37,5 +48,6 @@ export const isSignerDescriptor = (value: unknown): value is SignerDescriptor =>
 
   return kind === "bunker" &&
     typeof Reflect.get(value, "bunkerUrl") === "string" &&
-    typeof Reflect.get(value, "clientSecretKeyHex") === "string"
+    typeof Reflect.get(value, "clientSecretKeyHex") === "string" &&
+    (Reflect.get(value, "relays") === undefined || Array.isArray(Reflect.get(value, "relays")))
 }

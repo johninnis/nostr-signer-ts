@@ -20,8 +20,7 @@
  * import { HttpSession } from "@innis/nostr-signer/session"
  *
  * const session = await signerFor(descriptor, { transport })
- * if (session !== null) {
- *   await session.connect()
+ * if (session !== null && (await session.connect()).success) {
  *   const outcome = await new HttpSession(location.origin).signIn(session.signer)
  *   console.log(outcome.success ? outcome.value.pubkey : outcome.error.reason)
  * }

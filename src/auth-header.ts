@@ -1,15 +1,21 @@
-import { buildNip98AuthEvent, encodeAuthHeader } from "@innis/nostr-core"
-import type { Signer } from "@innis/nostr-core"
+import { buildNip98AuthEvent, encodeAuthHeader, failure, ok } from "@innis/nostr-core"
+import type { HttpUrl, Result, Signer, SignerFailure } from "@innis/nostr-core"
 
 /** The request a NIP-98 proof pins: its URL, its method, and its body when it has one. */
 export interface AuthHeaderRequest {
   /** The absolute URL the event's `u` tag names; the proof is worth nothing anywhere else. */
-  readonly url: string
+  readonly url: HttpUrl
   /** The HTTP method the event's `method` tag pins. */
   readonly method: string
   /** The request body, hashed into a `payload` tag; omit it (or pass empty) for a bodyless request. */
   readonly body?: string
 }
+
+/**
+ * Why no NIP-98 header came back: the signer's own `SignerFailure`, or `header-too-long` when the signed proof would
+ * be longer than the 4096 characters a server reads (a request URL too long to pin).
+ */
+export type AuthHeaderFailure = SignerFailure | { readonly type: "header-too-long"; readonly message: string }
 
 /**
  * A NIP-98 `Authorization` header for one request, signed by the given signer.
@@ -19,21 +25,23 @@ export interface AuthHeaderRequest {
  * nothing at any other URL, and a server with a replay guard will not take the same one
  * twice — which is why a fresh one is built per request.
  *
- * `signEvent` throws — on a refusal at the extension, on a bunker that never answers, on a
- * malformed reply. All of those mean the same thing to the caller, so they come back as
- * null. This is the layer where that conversion belongs: above it there is an answer, not
- * an exception.
+ * When the signer does not sign, its `SignerFailure` comes back as it is, so a caller can tell
+ * the person declining (`rejected`) from a bunker that never answered or a malformed reply. A proof too long for a
+ * server to read is `header-too-long`, and is never sent.
  */
-export const signedAuthHeader = async (signer: Signer, request: AuthHeaderRequest): Promise<string | null> => {
-  try {
-    const unsigned = await buildNip98AuthEvent({
-      url: request.url,
-      method: request.method,
-      body: request.body,
-    })
+export const signedAuthHeader = async (
+  signer: Signer,
+  request: AuthHeaderRequest,
+): Promise<Result<string, AuthHeaderFailure>> => {
+  const signed = await signer.signEvent(buildNip98AuthEvent({
+    url: request.url,
+    method: request.method,
+    body: request.body ?? "",
+  }))
 
-    return encodeAuthHeader(await signer.signEvent(unsigned))
-  } catch {
-    return null
-  }
+  if (!signed.success) return signed
+  const header = encodeAuthHeader(signed.value)
+  return header === null
+    ? failure({ type: "header-too-long", message: `The proof for ${request.url} is longer than a server reads` })
+    : ok(header)
 }

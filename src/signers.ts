@@ -1,3 +1,4 @@
+import { parseJson } from "@innis/nostr-core"
 import type { SignerDescriptor } from "./signer-descriptor.ts"
 import { isSignerDescriptor } from "./signer-descriptor.ts"
 
@@ -17,6 +18,15 @@ export interface Signers {
   forget(): void
 }
 
+const unlessStorageRefused = <T>(access: () => T): T | null => {
+  try {
+    return access()
+  } catch (error) {
+    if (error instanceof DOMException) return null
+    throw error
+  }
+}
+
 /**
  * The signer descriptor, in local storage under the application's own key.
  *
@@ -26,9 +36,10 @@ export interface Signers {
  * application, or by something else on the same origin, and anything that is not a
  * descriptor reads as none rather than failing later inside a signer.
  *
- * Every method tolerates storage being unavailable. Private browsing and quota limits both
- * make it throw, and someone who cannot save how they sign should still be able to sign in —
- * they will be asked again next time.
+ * Every method tolerates the browser refusing storage. Private browsing, blocked site data
+ * and quota limits all make it throw a `DOMException`, and someone who cannot save how they
+ * sign should still be able to sign in — they will be asked again next time. Any other throw
+ * is a fault and propagates.
  */
 export class LocalStorageSigners implements Signers {
   /** Remembers under `key`, the application's own name for its pairing. */
@@ -36,34 +47,22 @@ export class LocalStorageSigners implements Signers {
 
   /** The remembered descriptor, or null when none is stored or what is stored is not one. */
   read(): SignerDescriptor | null {
-    try {
-      const stored = globalThis.localStorage.getItem(this.key)
+    const stored = unlessStorageRefused(() => globalThis.localStorage.getItem(this.key))
 
-      if (stored === null) return null
+    if (stored === null) return null
 
-      const parsed: unknown = JSON.parse(stored)
+    const parsed = parseJson(stored)
 
-      return isSignerDescriptor(parsed) ? parsed : null
-    } catch {
-      return null
-    }
+    return parsed.success && isSignerDescriptor(parsed.value) ? parsed.value : null
   }
 
   /** Remember how this browser signs. */
   write(descriptor: SignerDescriptor): void {
-    try {
-      globalThis.localStorage.setItem(this.key, JSON.stringify(descriptor))
-    } catch {
-      return
-    }
+    unlessStorageRefused(() => globalThis.localStorage.setItem(this.key, JSON.stringify(descriptor)))
   }
 
   /** Discard the descriptor — and with it the bunker client credential it may carry. */
   forget(): void {
-    try {
-      globalThis.localStorage.removeItem(this.key)
-    } catch {
-      return
-    }
+    unlessStorageRefused(() => globalThis.localStorage.removeItem(this.key))
   }
 }

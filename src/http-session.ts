@@ -1,5 +1,5 @@
-import { failure, ok, tryParsePublicKey } from "@innis/nostr-core"
-import type { PublicKey, Result, Signer } from "@innis/nostr-core"
+import { failure, InvalidArgumentError, isRecord, ok, parseHttpUrl, parsePublicKey } from "@innis/nostr-core"
+import type { HttpUrl, PublicKey, Result, Signer } from "@innis/nostr-core"
 import { signedAuthHeader } from "./auth-header.ts"
 
 /** The default path a sign-in proof is signed for and posted to; the server names its own. */
@@ -25,12 +25,14 @@ export interface SessionPaths {
 /**
  * Why a session request did not succeed.
  *
- * `refused` is the server saying no. The other three never got an answer: nothing was
- * signed — the person declined at their extension, or the bunker never replied — the
- * server could not be reached, or what came back was not readable. The application words
- * these for its own audience; this module authors no user-facing copy.
+ * `refused` is the server saying no. `declined` is the person saying no at their signer, so
+ * nothing was posted. The other three never got an answer: no proof was made because the
+ * signer failed — the bunker never replied, the extension is gone — or the proof would be
+ * longer than a server reads, the server could not be reached, or what came back was not
+ * readable. The application words these for its own
+ * audience; this module authors no user-facing copy.
  */
-export type SessionFailureReason = "not-signed" | "unreachable" | "unreadable" | "refused"
+export type SessionFailureReason = "declined" | "not-signed" | "unreachable" | "unreadable" | "refused"
 
 /**
  * The refusal, as something an application can word.
@@ -80,9 +82,6 @@ export interface Session {
   signOut(): Promise<SessionOutcome>
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
 const readMessage = (payload: Record<string, unknown>): string | null => {
   const value = payload.message
 
@@ -111,9 +110,17 @@ const send = async (url: string, headers: Record<string, string>): Promise<Sessi
   if (payload.success !== true) return failure({ reason: "refused", message })
 
   return ok({
-    pubkey: typeof payload.pubkey === "string" ? tryParsePublicKey(payload.pubkey) : null,
+    pubkey: typeof payload.pubkey === "string" ? parsePublicKey(payload.pubkey) : null,
     message,
   })
+}
+
+const endpointUrl = (origin: string, path: string): HttpUrl => {
+  const url = parseHttpUrl(URL.parse(path, origin)?.href)
+  if (url === null) {
+    throw new InvalidArgumentError(`A session endpoint is an http or https URL, not ${path} at ${origin}`)
+  }
+  return url
 }
 
 /**
@@ -126,11 +133,17 @@ const send = async (url: string, headers: Record<string, string>): Promise<Sessi
  * hashes the body, so an empty one is the simplest thing that can be pinned.
  */
 export class HttpSession implements Session {
-  /** Speaks to `origin` — the page's own — at the default paths unless told where else. */
-  constructor(
-    private readonly origin: string,
-    private readonly paths: SessionPaths = {},
-  ) {}
+  private readonly signInUrl: HttpUrl
+  private readonly signOutUrl: HttpUrl
+
+  /**
+   * Speaks to `origin` — the page's own — at the default paths unless told where else. An origin that is not `http`
+   * or `https` is misuse and throws `InvalidArgumentError`.
+   */
+  constructor(origin: string, paths: SessionPaths = {}) {
+    this.signInUrl = endpointUrl(origin, paths.signIn ?? SIGN_IN_PATH)
+    this.signOutUrl = endpointUrl(origin, paths.signOut ?? SIGN_OUT_PATH)
+  }
 
   /**
    * Sign one NIP-98 proof and present it; the server answers with who is signed in.
@@ -140,16 +153,17 @@ export class HttpSession implements Session {
    * bunker never answered — nothing is posted, and the refusal reads `not-signed`.
    */
   async signIn(signer: Signer): Promise<SessionOutcome> {
-    const url = new URL(this.paths.signIn ?? SIGN_IN_PATH, this.origin).href
-    const header = await signedAuthHeader(signer, { url, method: "POST" })
+    const header = await signedAuthHeader(signer, { url: this.signInUrl, method: "POST" })
 
-    if (header === null) return failure({ reason: "not-signed", message: null })
+    if (!header.success) {
+      return failure({ reason: header.error.type === "rejected" ? "declined" : "not-signed", message: null })
+    }
 
-    return await send(url, { Authorization: header })
+    return await send(this.signInUrl, { Authorization: header.value })
   }
 
   /** End the session; the server forgets who was signed in. */
   async signOut(): Promise<SessionOutcome> {
-    return await send(new URL(this.paths.signOut ?? SIGN_OUT_PATH, this.origin).href, {})
+    return await send(this.signOutUrl, {})
   }
 }

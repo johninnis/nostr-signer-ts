@@ -11,8 +11,8 @@ import type { NostrEvent, RelayUrl } from "@innis/nostr-core"
  * never calls, and the only way to do that is to lie about the type.
  */
 export interface Nip46RelayPool {
-  /** Fan a subscription out across the bunker's relays. */
-  readonly subscribeMany: RelayPool["subscribeMany"]
+  /** Fan a live subscription out across the bunker's relays. */
+  readonly subscribeManyLive: RelayPool["subscribeManyLive"]
   /** Publish one envelope to one relay. */
   readonly publish: RelayPool["publish"]
   /** Close every socket the conversation opened. */
@@ -28,7 +28,7 @@ export interface Nip46RelayPool {
  * fetched and none of the visitor's own relays are contacted: this connection exists to
  * carry one conversation with one signer.
  *
- * Subscriptions are persistent. A leg that is not persistent closes itself the moment the
+ * Subscriptions are live. A leg that is not live closes itself the moment the
  * relay says it has sent everything it already had, and a NIP-46 reply is never in that
  * backlog — it is published in answer to the request about to be sent, so it always arrives
  * afterwards, to a subscription that would no longer exist.
@@ -46,7 +46,7 @@ export class RelayPoolTransport implements Nip46Transport {
     this.pool = pool
   }
 
-  /** Opens a persistent multi-relay subscription and returns a handle to abort it. */
+  /** Opens a live multi-relay subscription and returns a handle to abort it. */
   subscribe = (options: Nip46SubscribeOptions): Nip46Subscription => {
     const distinctRelays = new Set(options.relays).size
     const closedRelays = new Set<RelayUrl>()
@@ -54,7 +54,7 @@ export class RelayPoolTransport implements Nip46Transport {
 
     options.onStatus?.("pending")
 
-    const subscription = this.pool.subscribeMany(
+    const subscription = this.pool.subscribeManyLive(
       [...options.relays],
       [options.filter],
       {
@@ -70,7 +70,6 @@ export class RelayPoolTransport implements Nip46Transport {
           if (closedRelays.size === distinctRelays) options.onStatus?.("closed")
         },
       },
-      { persistent: true },
     )
 
     return { abort: () => subscription.unsubscribe() }

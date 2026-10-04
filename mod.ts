@@ -17,16 +17,18 @@
  *
  * @example
  * ```ts
+ * import { parseHttpUrl } from "@innis/nostr-core"
  * import { LocalStorageSigners, RelayPoolTransport, signedAuthHeader, signerFor } from "@innis/nostr-signer"
  *
+ * const endpoint = parseHttpUrl("https://relay.example/rpc")
  * const signers = new LocalStorageSigners("myapp.signer")
  * const descriptor = signers.read() ?? { kind: "extension" }
  * const transport = new RelayPoolTransport()
  *
  * const session = await signerFor(descriptor, { transport })
- * if (session !== null) {
- *   await session.connect()
- *   const header = await signedAuthHeader(session.signer, { url: "https://relay.example/rpc", method: "POST" })
+ * if (endpoint !== null && session !== null && (await session.connect()).success) {
+ *   const header = await signedAuthHeader(session.signer, { url: endpoint, method: "POST" })
+ *   if (!header.success && header.error.type === "rejected") console.log("the person declined to sign")
  *   session.disconnect()
  *   transport.dispose()
  * }

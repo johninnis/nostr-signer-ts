@@ -1,5 +1,5 @@
-import { assert, assertEquals } from "@std/assert"
-import { createLocalSigner, generateSecretKey } from "@innis/nostr-core"
+import { assert, assertEquals, assertThrows } from "@std/assert"
+import { createLocalSigner, failure, generateSecretKey, InvalidArgumentError } from "@innis/nostr-core"
 import type { Signer } from "@innis/nostr-core"
 import { HttpSession, SIGN_IN_PATH, SIGN_OUT_PATH } from "../src/http-session.ts"
 
@@ -57,7 +57,9 @@ const pinnedUrlOf = (header: string): string => {
 
 Deno.test("signing in signs a proof and presents it to the sign-in url", async () => {
   const signer = localSigner()
-  const pubkey = await signer.getPublicKey()
+  const signerPubkey = await signer.getPublicKey()
+  assert(signerPubkey.success)
+  const pubkey = signerPubkey.value
 
   await withFetch(() => json({ success: true, pubkey }), async (sent) => {
     const outcome = await new HttpSession(ORIGIN).signIn(signer)
@@ -80,17 +82,37 @@ Deno.test("the proof pins exactly the url it is posted to", async () => {
   })
 })
 
-Deno.test("a signer that cannot sign posts nothing and reads as not signed", async () => {
+Deno.test("a person who declines to sign posts nothing and reads as declined", async () => {
   const refusing: Signer = {
     ...localSigner(),
-    signEvent: () => Promise.reject(new Error("declined at the extension")),
+    signEvent: () => Promise.resolve(failure({ type: "rejected", message: "declined at the extension" })),
   }
 
   await withFetch(() => json({ success: true }), async (sent) => {
     const outcome = await new HttpSession(ORIGIN).signIn(refusing)
 
-    assertEquals(sent.length, 0)
-    assertEquals(outcome, { success: false, error: { reason: "not-signed", message: null } })
+    assertEquals([sent.length, outcome], [0, failure({ reason: "declined", message: null })])
+  })
+})
+
+Deno.test("a sign-in path too long for its proof to be read posts nothing and reads as not signed", async () => {
+  await withFetch(() => json({ success: true }), async (sent) => {
+    const outcome = await new HttpSession(ORIGIN, { signIn: `/${"a".repeat(4096)}` }).signIn(localSigner())
+
+    assertEquals([sent.length, outcome], [0, failure({ reason: "not-signed", message: null })])
+  })
+})
+
+Deno.test("a signer that cannot sign posts nothing and reads as not signed", async () => {
+  const unreachable: Signer = {
+    ...localSigner(),
+    signEvent: () => Promise.resolve(failure({ type: "disconnected", message: "bunker never answered" })),
+  }
+
+  await withFetch(() => json({ success: true }), async (sent) => {
+    const outcome = await new HttpSession(ORIGIN).signIn(unreachable)
+
+    assertEquals([sent.length, outcome], [0, failure({ reason: "not-signed", message: null })])
   })
 })
 
@@ -155,4 +177,8 @@ Deno.test("a server that mounted its endpoints elsewhere is spoken to there", as
     assertEquals(sent[0]?.path, `${ORIGIN}/auth/sign-in`)
     assertEquals(sent[1]?.path, `${ORIGIN}/auth/sign-out`)
   })
+})
+
+Deno.test("an origin that is not http or https is misuse and throws when the session is made", () => {
+  assertThrows(() => new HttpSession("file:///home"), InvalidArgumentError)
 })

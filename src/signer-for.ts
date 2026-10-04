@@ -1,9 +1,9 @@
-import { defaultLocalSignerTools, formatHex, generateSecretKey, hexRegex, parseHex } from "@innis/nostr-core"
-import type { LocalSignerTools, PublicKey, Signer } from "@innis/nostr-core"
+import { defaultLocalSignerTools, formatHex, generateSecretKey, ok, parseHex, parseRelayUrl } from "@innis/nostr-core"
+import type { LocalSignerTools, PublicKey, RelayUrl, Result, Signer, SignerFailure } from "@innis/nostr-core"
 import { createNip07Signer, isNostrExtension } from "@innis/nostr-nip07"
 import type { NostrExtension } from "@innis/nostr-nip07"
 import { createNip46ClientSigner, parseBunkerUrl } from "@innis/nostr-nip46"
-import type { Nip46Transport } from "@innis/nostr-nip46"
+import type { Nip46ClientMetadata, Nip46Transport } from "@innis/nostr-nip46"
 import type { SignerDescriptor } from "./signer-descriptor.ts"
 
 /** How long to keep looking for an extension that has not injected itself yet. */
@@ -12,20 +12,46 @@ const EXTENSION_WAIT_MS = 3000
 const EXTENSION_POLL_MS = 100
 
 /**
- * A signer, and the two things that have to happen around using one.
+ * How long logout waits for a bunker's `ack`. A bunker answers `logout` itself, with no prompt
+ * for a person to approve, so a live one replies within a relay round trip; past a few seconds
+ * it is not coming, and NIP-46 has the client forget its key regardless.
+ */
+const LOGOUT_WAIT_MS = 5000
+
+/**
+ * A signer, and the things that have to happen around using one.
  *
  * `connect` is what makes it usable — waiting for an extension to appear, or the NIP-46
- * handshake — and `disconnect` releases whatever that took. An extension needs nothing
- * released, so its disconnect does nothing; the shape is the same either way so no caller
- * has to know which it holds.
+ * handshake — and `disconnect` releases whatever that took. `logout` ends the session for
+ * good, telling a bunker so it can forget this client. An extension needs nothing released
+ * and has nothing to log out of, so those do nothing; the shape is the same either way so no
+ * caller has to know which it holds.
  */
 export interface SignerSession {
   /** The signer itself, satisfying the canonical contract from `@innis/nostr-core`. */
   readonly signer: Signer
-  /** Whatever makes the signer usable: nothing for an extension, the handshake for a bunker. */
-  readonly connect: () => Promise<void>
+  /**
+   * Whatever makes the signer usable: nothing for an extension, the handshake for a bunker. A
+   * bunker that refuses or never answers is a returned `SignerFailure`, not a throw.
+   */
+  readonly connect: () => Promise<Result<void, SignerFailure>>
   /** Releases whatever `connect` took; a no-op for an extension. */
   readonly disconnect: () => void
+  /**
+   * Ends the session: a bunker is sent NIP-46 `logout` and the session is torn down whether or
+   * not it acknowledged; an extension answers `ok` at once. NIP-46 makes the bunker's answer a
+   * courtesy — the application deletes the stored descriptor's client key whatever this returns.
+   * A bunker that has not answered within `timeoutMs` (default five seconds) is disconnected and
+   * reported as a `disconnected` failure.
+   */
+  readonly logout: (timeoutMs?: number) => Promise<Result<void, SignerFailure>>
+  /**
+   * The relays a bunker conversation runs over: those the bunker URL named until the bunker
+   * moves the client with `switch_relays` during `connect`, then the ones it moved to. None for
+   * an extension. Store them in the descriptor after `connect`, because a restored session does
+   * not ask the bunker again.
+   */
+  readonly getRelayUrls: () => ReadonlyArray<RelayUrl>
 }
 
 /** What building a signer needs from the application. */
@@ -42,6 +68,8 @@ export interface SignerDeps {
   readonly onPubkeyMismatch?: (expected: PublicKey, actual: PublicKey) => void
   /** The cryptographic primitives the NIP-46 envelopes are built with. */
   readonly tools?: LocalSignerTools
+  /** How the application names itself to a bunker when it pairs, so the bunker can label the connection. */
+  readonly clientMetadata?: Nip46ClientMetadata
 }
 
 /**
@@ -86,9 +114,24 @@ export const waitForExtension = (timeoutMs: number = EXTENSION_WAIT_MS): Promise
 /** A fresh client key for a new bunker pairing, as hex. */
 export const newClientSecretKeyHex = (): string => formatHex(generateSecretKey())
 
-const CLIENT_SECRET_KEY_HEX = hexRegex(64)
+const SECRET_KEY_BYTES = 32
 
-const clientSecretKeyFrom = (hex: string): Uint8Array | null => CLIENT_SECRET_KEY_HEX.test(hex) ? parseHex(hex) : null
+const clientSecretKeyFrom = (hex: string): Uint8Array | null => {
+  const bytes = parseHex(hex)
+  return bytes?.length === SECRET_KEY_BYTES ? bytes : null
+}
+
+/** The relays the bunker last moved the client to when the descriptor remembers them, else the ones its URL names. */
+const relayUrlsFor = (
+  descriptor: Extract<SignerDescriptor, { kind: "bunker" }>,
+  fallback: ReadonlyArray<RelayUrl>,
+): ReadonlyArray<RelayUrl> => {
+  const remembered = (descriptor.relays ?? [])
+    .map((relay) => typeof relay === "string" ? parseRelayUrl(relay) : null)
+    .filter((relay) => relay !== null)
+
+  return remembered.length > 0 ? remembered : fallback
+}
 
 /**
  * The one way an application gets a signer.
@@ -119,8 +162,10 @@ export const signerFor = async (
         getUserPubkey: deps.userPubkey ?? (() => null),
         onPubkeyMismatch: deps.onPubkeyMismatch,
       }),
-      connect: () => Promise.resolve(),
+      connect: () => Promise.resolve(ok(undefined)),
       disconnect: () => {},
+      logout: () => Promise.resolve(ok(undefined)),
+      getRelayUrls: () => [],
     }
   }
 
@@ -134,15 +179,21 @@ export const signerFor = async (
     transport: deps.transport,
     clientSecretKey,
     remoteSignerPubkey: bunker.remoteSignerPubkey,
-    relayUrls: bunker.relays,
+    relayUrls: relayUrlsFor(descriptor, bunker.relays),
     secret: knownPubkey === null ? bunker.secret : null,
     initialUserPubkey: knownPubkey,
     onPubkeyMismatch: deps.onPubkeyMismatch,
+    clientMetadata: deps.clientMetadata,
   })
 
   return {
     signer,
     connect: () => signer.connect(),
     disconnect: () => signer.disconnect(),
+    logout: (timeoutMs = LOGOUT_WAIT_MS) => {
+      const giveUp = setTimeout(() => signer.disconnect(), timeoutMs)
+      return signer.logout().finally(() => clearTimeout(giveUp))
+    },
+    getRelayUrls: () => signer.getRelayUrls(),
   }
 }

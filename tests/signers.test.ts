@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert"
+import { assertEquals, assertThrows } from "@std/assert"
 import { LocalStorageSigners } from "../src/signers.ts"
 import type { SignerDescriptor } from "../src/signer-descriptor.ts"
 
@@ -113,6 +113,20 @@ Deno.test("storage that throws is tolerated on every method", () => {
     signers.forget()
 
     assertEquals(signers.read(), null)
+  })
+})
+
+Deno.test("a storage fault that is not the browser refusing storage is not swallowed", () => {
+  const broken = {
+    getItem: (): string | null => {
+      throw new TypeError("storage shim bug")
+    },
+    setItem: (): void => {},
+    removeItem: (): void => {},
+  }
+
+  withStorage(broken, () => {
+    assertThrows(() => new LocalStorageSigners(KEY).read(), TypeError, "storage shim bug")
   })
 })
 
