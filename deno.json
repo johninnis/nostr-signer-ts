@@ -1,13 +1,6 @@
 {
   "name": "@innis/nostr-signer",
   "version": "0.2.0",
-  "links": [
-    "../nostr-core-ts",
-    "../nostr-relay-pool-ts",
-    "../nostr-nip07-ts",
-    "../nostr-nip46-ts",
-    "../coding-standards-ts"
-  ],
   "publish": {
     "exclude": ["tests/", "deno.lock", ".github/"]
   },
