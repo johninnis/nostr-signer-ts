@@ -121,7 +121,7 @@ const clientSecretKeyFrom = (hex: string): Uint8Array | null => {
   return bytes?.length === SECRET_KEY_BYTES ? bytes : null
 }
 
-/** The relays the bunker last moved the client to when the descriptor remembers them, else the ones its URL names. */
+// Deliberate: a restored session starts on the relays the descriptor remembers, never re-asking the bunker — see ADR-0001
 const relayUrlsFor = (
   descriptor: Extract<SignerDescriptor, { kind: "bunker" }>,
   fallback: ReadonlyArray<RelayUrl>,
@@ -190,6 +190,7 @@ export const signerFor = async (
     signer,
     connect: () => signer.connect(),
     disconnect: () => signer.disconnect(),
+    // Deliberate: logout waits a relay round trip, then forgets the bunker anyway — see ADR-0002
     logout: (timeoutMs = LOGOUT_WAIT_MS) => {
       const giveUp = setTimeout(() => signer.disconnect(), timeoutMs)
       return signer.logout().finally(() => clearTimeout(giveUp))
