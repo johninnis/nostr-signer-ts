@@ -24,7 +24,7 @@
     "@innis/nostr-core": "jsr:@innis/nostr-core@^0.4.0",
     "@innis/nostr-core/testing": "jsr:@innis/nostr-core@^0.4.0/testing",
     "@innis/nostr-nip07": "jsr:@innis/nostr-nip07@^0.3.0",
-    "@innis/nostr-nip46": "jsr:@innis/nostr-nip46@^0.3.0",
+    "@innis/nostr-nip46": "jsr:@innis/nostr-nip46@^0.4.0",
     "@innis/nostr-relay-pool": "jsr:@innis/nostr-relay-pool@^0.2.0"
   },
   "tasks": {
