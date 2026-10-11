@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-NIP-46's `switch_relays` lets a signer move a client onto the signer's own relays during the handshake, and a client is expected to honour the move. The move happens once, as part of the initial handshake. A session restored from a stored descriptor already knows the visitor's pubkey, so it sends no `connect` and the signer never moves it again.
+NIP-46's `switch_relays` lets a signer move a client onto the signer's own relays during the handshake, and a client is expected to honour the move. The move happens once, as part of the initial handshake. A session restored from a stored descriptor already knows the visitor's pubkey — the descriptor states it (ADR-0003) — so it sends no `connect` and the signer never moves it again.
 
-A signer that later migrates relays — its old URL names relays it has left — therefore strands every restored client on relays nobody answers, while fresh pairings work. The descriptor is the only thing that survives between sessions, and before this record it remembered the bunker URL and the client key but not where the signer last put the client.
+A signer that later migrates relays — its old URL names relays it has left — therefore strands every restored client on relays nobody answers, while fresh pairings work. The descriptor is the only thing that survives between sessions, and before this record it remembered the bunker URL and the client key but not where the signer last put the client. It now also remembers the pubkey the session was verified as (ADR-0003).
 
 ## Decision
 

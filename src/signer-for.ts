@@ -59,6 +59,14 @@ export interface SignerSession {
    * not ask the bunker again.
    */
   readonly getRelayUrls: () => ReadonlyArray<RelayUrl>
+  /**
+   * The user pubkey a bunker session is verified as: the one the descriptor states, or for a
+   * new pairing the one the bunker gives during `connect`; null until then. Null for an
+   * extension, whose descriptor remembers no identity. Store it in the descriptor after
+   * `connect`, beside the relays, so the next visit resumes the session rather than pairing
+   * again with a secret the bunker has already spent.
+   */
+  readonly getUserPubkey: () => PublicKey | null
 }
 
 /** What building a signer needs from the application. */
@@ -66,11 +74,16 @@ export interface SignerDeps {
   /** The wire a bunker is reached over; unused by an extension signer. */
   readonly transport: Nip46Transport
   /**
-   * The identity already established, when there is one — read fresh so a mid-session
-   * change is caught. It lets a bunker skip the pairing handshake, and it is what a signed
-   * event's pubkey is checked against.
+   * The identity the application expects the extension to sign as — the one it has signed
+   * in — read fresh each time it is needed. While it answers a pubkey, every event the
+   * extension signs is checked against it, so a switch of account inside the extension is
+   * refused as `pubkey-mismatch` and reported to `onPubkeyMismatch`, and the signer's
+   * `getPublicKey` answers it without asking the extension. While it answers null, or is
+   * absent, the signer checks against the first identity the extension gives it instead.
+   * Unused by a bunker signer: whether a bunker session resumes, and as whom, is the
+   * descriptor's `userPubkey`.
    */
-  readonly userPubkey?: () => PublicKey | null
+  readonly expectedExtensionPubkey?: () => PublicKey | null
   /** Told when the key that signed is not the key that signed in. */
   readonly onPubkeyMismatch?: (expected: PublicKey, actual: PublicKey) => void
   /** The cryptographic primitives the NIP-46 envelopes are built with. */
@@ -145,10 +158,11 @@ const relayUrlsFor = (
  *
  * Pairing with a bunker for the first time and picking one up again months later are the
  * same call with the same descriptor — the first time it is built from what the person
- * pasted, afterwards it is read from storage. A `userPubkey` that answers is what lets the
- * second case skip the handshake, because the identity was established when the pairing was
- * made — and the one-shot pairing secret from the bunker URL belongs to that first
- * handshake, so it is offered only while no identity is known.
+ * pasted, afterwards it is read from storage. A descriptor stating the `userPubkey` the
+ * pairing was verified as is what lets the second case skip the handshake, because the
+ * identity was established when the pairing was made — and the one-shot pairing secret from
+ * the bunker URL belongs to that first handshake, so it is offered only while the descriptor
+ * states no identity.
  *
  * Null when the descriptor cannot produce a signer at all: no extension is installed, or
  * the stored bunker URL or client key is not one. That is an answer, not a fault — a
@@ -158,21 +172,20 @@ export const signerFor = async (
   descriptor: SignerDescriptor,
   deps: SignerDeps,
 ): Promise<SignerSession | null> => {
-  const knownPubkey = deps.userPubkey?.() ?? null
-
   if (descriptor.kind === "extension") {
     if (await waitForExtension() === null) return null
 
     return {
       signer: createNip07Signer({
         getExtension: injectedExtension,
-        getUserPubkey: deps.userPubkey ?? (() => null),
+        getUserPubkey: deps.expectedExtensionPubkey ?? (() => null),
         onPubkeyMismatch: deps.onPubkeyMismatch,
       }),
       connect: () => Promise.resolve(ok(undefined)),
       disconnect: () => {},
       logout: () => Promise.resolve(ok(undefined)),
       getRelayUrls: () => [],
+      getUserPubkey: () => null,
     }
   }
 
@@ -181,22 +194,38 @@ export const signerFor = async (
 
   if (bunker === null || clientSecretKey === null) return null
 
+  // Deliberate: the descriptor, never deps, says whether a bunker session resumes and as whom — see ADR-0003
+  const resumedAs = descriptor.userPubkey ?? null
+
   const signer = createNip46ClientSigner({
     tools: deps.tools ?? defaultLocalSignerTools,
     transport: deps.transport,
     clientSecretKey,
     remoteSignerPubkey: bunker.remoteSignerPubkey,
     relayUrls: relayUrlsFor(descriptor, bunker.relays),
-    secret: knownPubkey === null ? bunker.secret : null,
-    initialUserPubkey: knownPubkey,
+    secret: resumedAs === null ? bunker.secret : null,
+    initialUserPubkey: resumedAs,
     onPubkeyMismatch: deps.onPubkeyMismatch,
     onAuthChallenge: deps.onAuthChallenge,
     clientMetadata: deps.clientMetadata,
   })
 
+  let verifiedAs = resumedAs
+
+  const connect = async (): Promise<Result<void, SignerFailure>> => {
+    const connected = await signer.connect()
+    if (!connected.success) return connected
+
+    const userPubkey = await signer.getPublicKey()
+    if (!userPubkey.success) return userPubkey
+
+    verifiedAs = userPubkey.value
+    return ok(undefined)
+  }
+
   return {
     signer,
-    connect: () => signer.connect(),
+    connect,
     disconnect: () => signer.disconnect(),
     // Deliberate: logout waits a relay round trip, then forgets the bunker anyway — see ADR-0002
     logout: (timeoutMs = LOGOUT_WAIT_MS) => {
@@ -204,5 +233,6 @@ export const signerFor = async (
       return signer.logout().finally(() => clearTimeout(giveUp))
     },
     getRelayUrls: () => signer.getRelayUrls(),
+    getUserPubkey: () => verifiedAs,
   }
 }

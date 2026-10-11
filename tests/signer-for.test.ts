@@ -1,21 +1,18 @@
 import { assert, assertEquals } from "@std/assert"
-import {
-  createLocalSigner,
-  defaultLocalSignerTools,
-  failure,
-  generateSecretKey,
-  KIND_NOSTR_CONNECT,
-  now,
-  ok,
-} from "@innis/nostr-core"
-import type { NostrEvent } from "@innis/nostr-core"
+import { createLocalSigner, defaultLocalSignerTools, failure, generateSecretKey, now, ok } from "@innis/nostr-core"
+import type { NostrEvent, UnsignedEvent } from "@innis/nostr-core"
 import { publicKeyFixture, relayUrlFixture } from "@innis/nostr-core/testing"
 import type { Nip46PublishResult, Nip46Subscription, Nip46Transport } from "@innis/nostr-nip46"
 import type { SignerDescriptor } from "../src/signer-descriptor.ts"
-import type { SignerDeps, SignerSession } from "../src/signer-for.ts"
 import { injectedExtension, newClientSecretKeyHex, signerFor, waitForExtension } from "../src/signer-for.ts"
 
+type BunkerDescriptor = Extract<SignerDescriptor, { kind: "bunker" }>
+
 const BUNKER = "82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2"
+
+const USER = publicKeyFixture("f".repeat(64))
+
+const SIGNED_IN = publicKeyFixture("d".repeat(64))
 
 /** Never reached: these tests build signers, they do not talk to anything. */
 const silentTransport: Nip46Transport = {
@@ -42,11 +39,24 @@ const clearNostr = (): void => {
   Reflect.deleteProperty(globalThis, "nostr")
 }
 
-const bunkerDescriptor = (): SignerDescriptor => ({
+const bunkerDescriptor = (): BunkerDescriptor => ({
   kind: "bunker",
   bunkerUrl: `bunker://${BUNKER}?relay=wss://relay.example`,
   clientSecretKeyHex: newClientSecretKeyHex(),
 })
+
+const resumedBunkerDescriptor = (): BunkerDescriptor => ({ ...bunkerDescriptor(), userPubkey: USER })
+
+/** An extension whose current account is the key given, signing for real so only the identity can be wrong. */
+const extensionSigningAs = (secretKey: Uint8Array): unknown => ({
+  getPublicKey: (): Promise<string> => Promise.resolve(defaultLocalSignerTools.getPublicKey(secretKey)),
+  signEvent: async (event: UnsignedEvent): Promise<unknown> => {
+    const signed = await createLocalSigner(secretKey).signEvent(event)
+    return signed.success ? signed.value : null
+  },
+})
+
+const note = (): UnsignedEvent => ({ kind: 1, created_at: now(), tags: [], content: "hello" })
 
 Deno.test("an extension descriptor yields an extension signer", async () => {
   setNostr(workingExtension)
@@ -65,13 +75,10 @@ Deno.test("a bunker descriptor yields a bunker signer", async () => {
 
 /**
  * The point of the one factory: pairing for the first time and picking the same bunker up
- * months later are this call with this descriptor, and only what userPubkey answers differs.
+ * months later are this call with this descriptor, and only whether it states the user pubkey differs.
  */
-Deno.test("a known pubkey still yields a signer, so restoring is the same call", async () => {
-  const session = await signerFor(bunkerDescriptor(), {
-    transport: silentTransport,
-    userPubkey: () => publicKeyFixture("f".repeat(64)),
-  })
+Deno.test("a descriptor stating the user pubkey still yields a signer, so restoring is the same call", async () => {
+  const session = await signerFor(resumedBunkerDescriptor(), { transport: silentTransport })
 
   assert(session !== null)
 })
@@ -206,37 +213,26 @@ Deno.test("a bunker signer talks over the relays its bunker url names until the 
 
 /** A restored session does not re-ask switch_relays, so it starts where the bunker last put it. */
 Deno.test("a restored bunker session starts on the relays the descriptor remembers", async () => {
-  const session = await signerFor(restoredBunkerDescriptor(["wss://moved.example"]), {
-    transport: silentTransport,
-    userPubkey: () => publicKeyFixture("f".repeat(64)),
-  })
+  const session = await signerFor(restoredBunkerDescriptor(["wss://moved.example"]), { transport: silentTransport })
 
   assertEquals(session?.getRelayUrls(), [relayUrlFixture("wss://moved.example")])
 })
 
 /** Storage is untrusted: a remembered relay that no longer parses is dropped, not honoured. */
 Deno.test("remembered relays that no longer parse fall back to the bunker url's", async () => {
-  const session = await signerFor(restoredBunkerDescriptor(["not-a-relay"]), {
-    transport: silentTransport,
-    userPubkey: () => publicKeyFixture("f".repeat(64)),
-  })
+  const session = await signerFor(restoredBunkerDescriptor(["not-a-relay"]), { transport: silentTransport })
 
   assertEquals(session?.getRelayUrls(), [relayUrlFixture("wss://relay.example")])
 })
 
 const restoredBunkerDescriptor = (relays: ReadonlyArray<string>): SignerDescriptor => ({
-  kind: "bunker",
-  bunkerUrl: `bunker://${BUNKER}?relay=wss://relay.example`,
-  clientSecretKeyHex: newClientSecretKeyHex(),
+  ...resumedBunkerDescriptor(),
   relays,
 })
 
 /** NIP-46 makes logout a courtesy: the host deletes its key whatever the bunker says, so the answer is returned. */
 Deno.test("a bunker logout that reaches no relay is reported, not thrown", async () => {
-  const session = await signerFor(bunkerDescriptor(), {
-    transport: refusingTransport,
-    userPubkey: () => publicKeyFixture("f".repeat(64)),
-  })
+  const session = await signerFor(resumedBunkerDescriptor(), { transport: refusingTransport })
   assert(session !== null)
   await session.connect()
 
@@ -245,10 +241,7 @@ Deno.test("a bunker logout that reaches no relay is reported, not thrown", async
 
 /** NIP-46: the client deletes its key whether or not the bunker acknowledged, so a silent bunker must not hold logout up. */
 Deno.test("a bunker that never answers logout is given up on after the wait", async () => {
-  const session = await signerFor(bunkerDescriptor(), {
-    transport: silentTransport,
-    userPubkey: () => publicKeyFixture("f".repeat(64)),
-  })
+  const session = await signerFor(resumedBunkerDescriptor(), { transport: silentTransport })
   assert(session !== null)
   await session.connect()
 
@@ -288,110 +281,27 @@ Deno.test("a bunker pairing tells the bunker who is connecting", async () => {
   assertEquals(JSON.parse(request.params[3]), { name: "Example", url: "https://example.com" })
 })
 
-const AUTH_URL = "https://bunker.example/approve?request=1"
+Deno.test("an extension session has no verified pubkey for the descriptor to remember", async () => {
+  setNostr(workingExtension)
 
-const PEER = publicKeyFixture("e".repeat(64))
+  const session = await signerFor({ kind: "extension" }, { transport: silentTransport })
+  clearNostr()
 
-interface BunkerReply {
-  readonly result: string
-  readonly error?: string
-}
+  assertEquals(session?.getUserPubkey(), null)
+})
 
-interface ScriptedBunker {
-  readonly transport: Nip46Transport
-  readonly descriptor: SignerDescriptor
-  readonly answer: (reply: BunkerReply) => Promise<void>
-}
+/** A page load after the person switched account in their extension: no first identity is pinned yet, so only the expected pubkey can tell. */
+Deno.test("an extension that has switched account since sign-in is caught by the expected pubkey", async () => {
+  setNostr(extensionSigningAs(generateSecretKey()))
 
-const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
-
-const scriptedBunker = (): ScriptedBunker => {
-  const bunkerSecretKey = generateSecretKey()
-  const requests: NostrEvent[] = []
-  const deliveries: Array<(event: NostrEvent) => void> = []
-  const transport: Nip46Transport = {
-    subscribe: ({ onEvent }): Nip46Subscription => {
-      deliveries.push(onEvent)
-      return { abort: () => {} }
-    },
-    publish: (_relay, event): Promise<Nip46PublishResult> => {
-      requests.push(event)
-      return Promise.resolve({ ok: true })
-    },
-  }
-  const answer = async (reply: BunkerReply): Promise<void> => {
-    await nextTask()
-    const request = requests.at(-1)
-    assert(request !== undefined)
-    const conversationKey = defaultLocalSignerTools.getNip44ConversationKey(bunkerSecretKey, request.pubkey)
-    const { id } = JSON.parse(defaultLocalSignerTools.nip44Decrypt(conversationKey, request.content))
-    const response = await createLocalSigner(bunkerSecretKey).signEvent({
-      kind: KIND_NOSTR_CONNECT,
-      created_at: now(),
-      tags: [["p", request.pubkey]],
-      content: defaultLocalSignerTools.nip44Encrypt(conversationKey, JSON.stringify({ id, ...reply })),
-    })
-    assert(response.success)
-    for (const deliver of deliveries) deliver(response.value)
-    await nextTask()
-  }
-  return {
-    transport,
-    descriptor: {
-      kind: "bunker",
-      bunkerUrl: `bunker://${defaultLocalSignerTools.getPublicKey(bunkerSecretKey)}?relay=wss://relay.example`,
-      clientSecretKeyHex: newClientSecretKeyHex(),
-    },
-    answer,
-  }
-}
-
-const connectedTo = async (bunker: ScriptedBunker, deps: Partial<SignerDeps> = {}): Promise<SignerSession> => {
-  const session = await signerFor(bunker.descriptor, {
-    transport: bunker.transport,
-    userPubkey: () => publicKeyFixture("f".repeat(64)),
-    ...deps,
+  const session = await signerFor({ kind: "extension" }, {
+    transport: silentTransport,
+    expectedExtensionPubkey: () => SIGNED_IN,
   })
-  assert(session !== null)
-  await session.connect()
-  return session
-}
+  const signed = await session?.signer.signEvent(note())
+  clearNostr()
 
-Deno.test("a bunker's auth challenge hands its url to the listener", async () => {
-  const bunker = scriptedBunker()
-  const handedOver: string[] = []
-  const session = await connectedTo(bunker, { onAuthChallenge: (url) => handedOver.push(url) })
-  const encrypting = session.signer.nip44Encrypt(PEER, "hi")
-
-  await bunker.answer({ result: "auth_url", error: AUTH_URL })
-  session.disconnect()
-  await encrypting
-
-  assertEquals(handedOver, [AUTH_URL])
-})
-
-Deno.test("a request a bunker challenged waits for the bunker's answer when a listener is given", async () => {
-  const bunker = scriptedBunker()
-  const session = await connectedTo(bunker, { onAuthChallenge: () => {} })
-  const encrypting = session.signer.nip44Encrypt(PEER, "hi")
-
-  await bunker.answer({ result: "auth_url", error: AUTH_URL })
-  await bunker.answer({ result: "ciphertext" })
-
-  assertEquals(await encrypting, ok("ciphertext"))
-})
-
-Deno.test("a request a bunker challenged fails at once, naming the url, when no listener is given", async () => {
-  const bunker = scriptedBunker()
-  const session = await connectedTo(bunker)
-  const encrypting = session.signer.nip44Encrypt(PEER, "hi")
-
-  await bunker.answer({ result: "auth_url", error: AUTH_URL })
-
-  assertEquals(
-    await encrypting,
-    failure({ type: "encrypt-failed", message: `bunker requires authentication: ${AUTH_URL}` }),
-  )
+  assertEquals(signed?.success ? null : signed?.error.type, "pubkey-mismatch")
 })
 
 const withNostr = async (value: unknown, run: () => void): Promise<void> => {

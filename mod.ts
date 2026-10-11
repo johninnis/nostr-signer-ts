@@ -27,6 +27,10 @@
  *
  * const session = await signerFor(descriptor, { transport })
  * if (endpoint !== null && session !== null && (await session.connect()).success) {
+ *   const userPubkey = session.getUserPubkey()
+ *   if (descriptor.kind === "bunker" && userPubkey !== null) {
+ *     signers.write({ ...descriptor, relays: session.getRelayUrls(), userPubkey })
+ *   }
  *   const header = await signedAuthHeader(session.signer, { url: endpoint, method: "POST" })
  *   if (!header.success && header.error.type === "rejected") console.log("the person declined to sign")
  *   session.disconnect()
