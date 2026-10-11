@@ -21,3 +21,4 @@ A signer that later migrates relays — its old URL names relays it has left —
 - A signer that migrates relays keeps its restored clients, which is the case `switch_relays` exists for.
 - The descriptor stays JSON all the way down, and an old descriptor reads exactly as before.
 - An application that never writes the relays back gets the old behaviour: every restored session starts from the bunker URL's relays.
+- Shared decision: nostr-adrs ADR-0060.

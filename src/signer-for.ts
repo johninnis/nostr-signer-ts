@@ -1,4 +1,11 @@
-import { defaultLocalSignerTools, formatHex, generateSecretKey, ok, parseHex, parseRelayUrl } from "@innis/nostr-core"
+import {
+  defaultLocalSignerTools,
+  formatHex,
+  generateSecretKey,
+  ok,
+  parseRelayUrl,
+  parseSecretKey,
+} from "@innis/nostr-core"
 import type { LocalSignerTools, PublicKey, RelayUrl, Result, Signer, SignerFailure } from "@innis/nostr-core"
 import { createNip07Signer, isNostrExtension } from "@innis/nostr-nip07"
 import type { NostrExtension } from "@innis/nostr-nip07"
@@ -70,6 +77,13 @@ export interface SignerDeps {
   readonly tools?: LocalSignerTools
   /** How the application names itself to a bunker when it pairs, so the bunker can label the connection. */
   readonly clientMetadata?: Nip46ClientMetadata
+  /**
+   * Told the URL of the page a bunker asks the person to authorise a request in (NIP-46 `auth_url`), so the
+   * application can offer it to them; the request keeps waiting for the bunker's real answer, which comes once they
+   * have authorised. Only a web URL is ever passed, exactly as the bunker sent it. Without a listener such a request
+   * fails at once with the message `bunker requires authentication: <url>`. Unused by an extension signer.
+   */
+  readonly onAuthChallenge?: (url: string) => void
 }
 
 /**
@@ -113,13 +127,6 @@ export const waitForExtension = (timeoutMs: number = EXTENSION_WAIT_MS): Promise
 
 /** A fresh client key for a new bunker pairing, as hex. */
 export const newClientSecretKeyHex = (): string => formatHex(generateSecretKey())
-
-const SECRET_KEY_BYTES = 32
-
-const clientSecretKeyFrom = (hex: string): Uint8Array | null => {
-  const bytes = parseHex(hex)
-  return bytes?.length === SECRET_KEY_BYTES ? bytes : null
-}
 
 // Deliberate: a restored session starts on the relays the descriptor remembers, never re-asking the bunker — see ADR-0001
 const relayUrlsFor = (
@@ -170,7 +177,7 @@ export const signerFor = async (
   }
 
   const bunker = parseBunkerUrl(descriptor.bunkerUrl)
-  const clientSecretKey = clientSecretKeyFrom(descriptor.clientSecretKeyHex)
+  const clientSecretKey = parseSecretKey(descriptor.clientSecretKeyHex)
 
   if (bunker === null || clientSecretKey === null) return null
 
@@ -183,6 +190,7 @@ export const signerFor = async (
     secret: knownPubkey === null ? bunker.secret : null,
     initialUserPubkey: knownPubkey,
     onPubkeyMismatch: deps.onPubkeyMismatch,
+    onAuthChallenge: deps.onAuthChallenge,
     clientMetadata: deps.clientMetadata,
   })
 
