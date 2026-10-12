@@ -58,5 +58,5 @@ console.log(outcome.success ? outcome.value.pubkey : outcome.error.reason)
 ## Development
 
 ```sh
-deno task ci    # fmt:check, lint, check, coverage, exports-tested, docs
+deno task ci    # fmt:check, lint, check, coverage, exports-tested, docs, path-lengths
 ```
