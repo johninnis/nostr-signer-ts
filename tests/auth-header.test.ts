@@ -1,3 +1,4 @@
+import { httpMethodFrom } from "@innis/nostr-core"
 import { assert, assertEquals } from "@std/assert"
 import { createLocalSigner, failure, generateSecretKey } from "@innis/nostr-core"
 import type { Signer } from "@innis/nostr-core"
@@ -9,7 +10,7 @@ const localSigner = (): Signer => createLocalSigner(generateSecretKey())
 Deno.test("a signed request becomes a Nostr authorisation header", async () => {
   const header = await signedAuthHeader(localSigner(), {
     url: httpUrlFixture("https://relay.example/rpc"),
-    method: "POST",
+    method: httpMethodFrom("POST"),
   })
 
   assert(header.success)
@@ -19,7 +20,7 @@ Deno.test("a signed request becomes a Nostr authorisation header", async () => {
 Deno.test("the body is hashed into the proof when there is one", async () => {
   const withBody = await signedAuthHeader(localSigner(), {
     url: httpUrlFixture("https://relay.example/rpc"),
-    method: "POST",
+    method: httpMethodFrom("POST"),
     body: '{"op":"status"}',
   })
 
@@ -31,7 +32,10 @@ Deno.test("a decline comes back as the signer's rejected failure, not folded int
   const refusing: Signer = { ...localSigner(), signEvent: () => Promise.resolve(failure(declined)) }
 
   assertEquals(
-    await signedAuthHeader(refusing, { url: httpUrlFixture("https://relay.example/rpc"), method: "POST" }),
+    await signedAuthHeader(refusing, {
+      url: httpUrlFixture("https://relay.example/rpc"),
+      method: httpMethodFrom("POST"),
+    }),
     failure(declined),
   )
 })
@@ -41,7 +45,10 @@ Deno.test("a signer that fails comes back as its failure", async () => {
   const unreachable: Signer = { ...localSigner(), signEvent: () => Promise.resolve(failure(broken)) }
 
   assertEquals(
-    await signedAuthHeader(unreachable, { url: httpUrlFixture("https://relay.example/rpc"), method: "POST" }),
+    await signedAuthHeader(unreachable, {
+      url: httpUrlFixture("https://relay.example/rpc"),
+      method: httpMethodFrom("POST"),
+    }),
     failure(broken),
   )
 })
@@ -49,7 +56,7 @@ Deno.test("a signer that fails comes back as its failure", async () => {
 Deno.test("a proof longer than a server reads comes back as header-too-long, not as a header", async () => {
   const header = await signedAuthHeader(localSigner(), {
     url: httpUrlFixture(`https://relay.example/${"a".repeat(4096)}`),
-    method: "POST",
+    method: httpMethodFrom("POST"),
   })
 
   assertEquals(header.success ? null : header.error.type, "header-too-long")

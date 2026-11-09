@@ -9,7 +9,7 @@
  */
 
 import { assert, assertEquals } from "@std/assert"
-import { createLocalSigner, generateSecretKey, parseAuthHeader, parseHttpUrl } from "@innis/nostr-core"
+import { createLocalSigner, generateSecretKey, httpMethodFrom, parseAuthHeader, parseHttpUrl } from "@innis/nostr-core"
 import type { Result, SignerFailure, UnsignedEvent } from "@innis/nostr-core"
 import type { Nip46Transport } from "@innis/nostr-nip46"
 import { LocalStorageSigners, newClientSecretKeyHex, signedAuthHeader, signerFor } from "../mod.ts"
@@ -50,7 +50,7 @@ assertEquals((await session.connect()).success, true)
 
 const endpoint = parseHttpUrl("https://api.example/rpc")
 assert(endpoint !== null)
-const header = await signedAuthHeader(session.signer, { url: endpoint, method: "POST" })
+const header = await signedAuthHeader(session.signer, { url: endpoint, method: httpMethodFrom("POST") })
 assert(header.success)
 const proof = parseAuthHeader(header.value)
 assert(proof.success && proof.value.pubkey === pubkey)

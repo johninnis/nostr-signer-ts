@@ -1,12 +1,12 @@
 import { buildNip98AuthEvent, encodeAuthHeader, failure, ok } from "@innis/nostr-core"
-import type { HttpUrl, Result, Signer, SignerFailure } from "@innis/nostr-core"
+import type { HttpMethod, HttpUrl, Result, Signer, SignerFailure } from "@innis/nostr-core"
 
 /** The request a NIP-98 proof pins: its URL, its method, and its body when it has one. */
 export interface AuthHeaderRequest {
   /** The absolute URL the event's `u` tag names; the proof is worth nothing anywhere else. */
   readonly url: HttpUrl
   /** The HTTP method the event's `method` tag pins. */
-  readonly method: string
+  readonly method: HttpMethod
   /** The request body, hashed into a `payload` tag; omit it (or pass empty) for a bodyless request. */
   readonly body?: string
 }

@@ -1,6 +1,16 @@
-import { failure, InvalidArgumentError, isRecord, ok, parseHttpUrl, parsePublicKey } from "@innis/nostr-core"
+import {
+  failure,
+  httpMethodFrom,
+  InvalidArgumentError,
+  isRecord,
+  ok,
+  parseHttpUrl,
+  parsePublicKey,
+} from "@innis/nostr-core"
 import type { HttpUrl, PublicKey, Result, Signer } from "@innis/nostr-core"
 import { signedAuthHeader } from "./auth-header.ts"
+
+const POST = httpMethodFrom("POST")
 
 /** The default path a sign-in proof is signed for and posted to; the server names its own. */
 export const SIGN_IN_PATH = "/action/sign-in"
@@ -90,7 +100,7 @@ const readMessage = (payload: Record<string, unknown>): string | null => {
 
 const post = async (url: string, headers: Record<string, string>): Promise<Response | null> => {
   try {
-    return await fetch(url, { method: "POST", headers, credentials: "same-origin" })
+    return await fetch(url, { method: POST, headers, credentials: "same-origin" })
   } catch {
     return null
   }
@@ -153,7 +163,7 @@ export class HttpSession implements Session {
    * bunker never answered — nothing is posted, and the refusal reads `not-signed`.
    */
   async signIn(signer: Signer): Promise<SessionOutcome> {
-    const header = await signedAuthHeader(signer, { url: this.signInUrl, method: "POST" })
+    const header = await signedAuthHeader(signer, { url: this.signInUrl, method: POST })
 
     if (!header.success) {
       return failure({ reason: header.error.type === "rejected" ? "declined" : "not-signed", message: null })
